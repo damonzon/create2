@@ -1,0 +1,217 @@
+setwd("/Users/patrickkelly/Documents/Machine Learning/Week4")
+getwd()
+
+---
+title: "Practical Machine Learning - Assignment"
+author: "Patrick Kelly"
+date: "March 15, 2016"
+output: html_document
+---
+
+```{r}
+time <- format(Sys.time(), "%a %b %d %X %Y ")
+(time2 <- (format(Sys.time(), "%X")))
+str(time2)
+time2 <- as.numeric(as.character(time2))
+class(time2)
+time3 <- (format(Sys.time(), "%X"))
+time3 - time2
+message(sprintf("Run time: %s\nR version: %s", Sys.time(), 
+                R.Version()$version.string))
+ptm <- proc.time()
+```
+# Data, data...everywhere!
+### With the Internet of Things and ever growing numbers of sensors, we have now entered the age of the Data Revolution. In 1981, Bill Gates is alledged to have said: "640K of memory ought to be enough for anybody." Now any serious analyst has access to at least 8 gigabytes and often much, much more, as more and more data are generated, faster and faster. One area of growing interest is the quantificaton of activites related to health.   This project uses data from a study entitled:Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements that can be found on this website: 
+### http://groupware.les.inf.puc-rio.br/work.jsf?p1=10335
+### The goal of the analysis is to use machine learning algortihms to develop models that can predict the quality of the exercises for 20 different test cases. So let's get started.
+## 1. Prepare the Problem
+
+### a) Load libraries
+```{r}
+library(caret)
+library(randomForest)
+library(doMC)
+registerDoMC(cores = 8)
+```
+### b) Download datasets 
+```{r}
+trainUrl <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+if (!file.exists("pml-training.csv")) {
+    download.file(trainUrl, destfile="pml-training.csv", method="curl")
+}
+if (!file.exists("pml-testing.csv")) {
+    download.file(testUrl, destfile="pml-testing.csv", method="curl")
+}
+```
+### c) Read datasets into R
+### I first loaded the datasets into Excel and sqw that there were many instances of NA, #DIV/0!, and blank cells. These values were all converted to NA when loaded into R.
+```{r}
+train <- read.csv("pml-training.csv", na.strings = c("NA", "#DIV/0!",""))
+test <- read.csv("pml-testing.csv", na.strings = c("NA", "#DIV/0!",""))
+```
+## 2. Summarize Data
+### a) Descriptive statistics
+```{r}
+dim(train)
+dim(test)
+names(train)[160]
+names(test)[160]
+```
+## 3. Prepare Data
+### a) Data Cleaning
+```{r}
+names(train)[1:7]
+names(test)[1:7]
+```
+### These variables appear to be metadata rather than predictors and thus will be removed, along with all variables having NAs. 
+
+```{r}
+train <- train[, -c(1:7)]
+train_no_NA <- apply(train, 2, function(x) {sum(is.na(x))})
+train <- train[,which(train_no_NA == 0)]
+dim(train)
+test <- test[, -c(1:7)]
+test_no_NA <- apply(test, 2, function(x) {sum(is.na(x))})
+test <- test[,which(test_no_NA == 0)]
+dim(test)
+```
+## 4. Split-out validation dataset
+
+```{r}
+set.seed(11235)
+train_index <-  createDataPartition(train$classe, p = 0.7, list = FALSE)
+training <- train[train_index, ]
+validation <- train[-train_index, ]
+dim(training)
+dim(validation)
+```
+## 5. Data Transforms
+### All the 52 predictor variables are numeric, so  I decided to try models without any transformations such as standardization.
+
+## 6. Evaluate Algorithms
+### There are many ways to skin the cat in classification prediction models. I chose 3 algorithms that are in the caret package and one in the randomForest package.  
+### a) Test options and evaluation metric with cross validation
+```{r}
+control <- trainControl(method="repeatedcv", number=10, repeats=3)
+metric <- "Accuracy"
+preProcess = c("center","scale")
+```
+
+## b) Linear algorithm
+### Linear Discriminant Analysis (caret)
+```{r}
+ptm <- proc.time()
+fit.lda <- train(classe ~., data=training, method="lda", metric=metric, trControl=control)
+proc.time() - ptm
+```
+## c) Non-linear algorithms 
+### CART -  Classification And REgression Training (caret)
+```{r}
+fit.cart <- train(classe ~., data=training, method="rpart", metric=metric, trControl=control)
+```
+
+### CART Tuned (caret)
+```{r}
+grid <- expand.grid(.cp=c(0.01,0.05,0.1))
+fit.cart_grid <- train(classe~., data=training, method="rpart", metric="Accuracy", tuneGrid=grid, trControl=control)
+```
+
+### kNN - requires variables to be normalized or scaled (caret)
+```{r}
+fit.knn <- train(classe ~., data=training, method="knn", metric=metric, 
+                 trControl=control,preProcess = c("center","scale"))
+```
+
+### kNN Tuned (caret)
+```{r}
+grid <- expand.grid(.k=c(1,3,5,7))
+fit.knn.grid <- train(classe ~., data=training, method="knn", metric=metric, 
+        trControl=control,preProcess = c("center","scale"),tuneGrid=grid)
+```
+
+### Bagging (caret)
+```{r}
+fit.treebag <- train(classe~., data=training, method="treebag", metric=metric,
+                     trControl=control)
+```
+
+# Random Forest (Caret) - This runs very slowly.
+```{r}
+set.seed(7)
+fit.rf_caret <- train(classe ~ ., data = training, method = "rf", metric =      metric, preProc = c("BoxCox"), trControl = control)
+```
+### The Random Forest algorithm in caret took a very long time
+### d) Random Forest (package = randomForest)
+
+```{r}
+fit.rf <- randomForest(classe ~., data=training)
+```
+### The random forest out-of-bag (oob) error rate estimate = 0.5% 
+
+## e) Several ways to compare CARET models
+### KNN_Tuned and Bagging are the most accurate, CART is least accurate.
+### Compare the mean values for accuracy and Cohen's Kappa
+
+```{r}
+results_caret <- resamples(list(lda=fit.lda, cart=fit.cart, knn=fit.knn,
+     knn_tuned=fit.knn.grid, bagging=fit.treebag, cart_tuned=fit.cart_grid,
+     rf_caret=fit.rf_caret))
+summary(results_caret)
+dotplot(results_caret)
+```
+
+# Summarize p-values for pair-wise comparisons of CARET models
+```{r}
+diffs <- diff(results_caret)
+summary(diffs)
+```
+
+### Parallel plots for CARET model comparisons
+```{r}
+parallelplot(results_caret)
+```
+
+### Box and Whisker plots to compare CARET models
+```{r}
+scales <- list(x = list(relation = "free"), y = list(relation = "free"))
+bwplot(results_caret, scales = scales)
+```
+
+### Plot of differences among CARET models
+```{r}
+bwplot(diffs, scales=scales)
+```
+
+## Compare RF (Caret), KNN Tuned and Bagging to RF (Random Forest)
+### Model cross validation using the validation data, which is 30% of the original data
+
+```{r}
+predict_RF_caret <- predict(fit.rf_caret, validation)
+confusionMatrix(validation$classe, predict_RF_caret)$overall[1]
+predict_KNN_tuned <- predict(fit.knn.grid, validation)
+confusionMatrix(validation$classe, predict_KNN_tuned)$overall[1]
+predict_bagging <- predict(fit.treebag, validation)
+confusionMatrix(validation$classe, predict_bagging)$overall[1]
+predict_RF <- predict(fit.rf, validation)
+confusionMatrix(validation$classe, predict_RF)$overall[1]
+```
+
+### Since the RF (Random Forest) accuracy is the highest, I chose it to be my final model. The question is: Is this overfitting?
+
+##  7. Using the final model
+### a) Run the RF model on the test data with 20 cases
+
+```{r}
+predict_test_RF <- predict(fit.rf, test)
+predict_test_RF
+```
+### b) Save the final model for later use.
+### R code: saveRDS(fit.rf, "finalModel_PML_Project.rds")
+
+### It can be loaded as needed.
+### R Code: finalModel_PML_Project <- readRDS("finalModel_PML_Project.rds")
+
+##  8. Conclusion
+### As is often the case with data in the real world,  the tidying (also known as wrangling or munging) of the data, required quite a bit of time and effort. What are the hints for choosing the best model? It takes a lot of exploration and trial and error, since no one algorithm is best for all databases.                   
+## That's all folks!
